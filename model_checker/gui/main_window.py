@@ -131,8 +131,17 @@ class MainWindow(QMainWindow):
         self.next_btn.setEnabled(not is_last)
         self.next_btn.setText("完成" if is_last else "下一步")
 
+    def _is_image_dir_mode(self) -> bool:
+        """图片目录模式：选了图片目录且未选视频，跳过抽帧步骤。"""
+        return bool(self.state.image_dir) and not self.state.video_path
+
     def _prev(self) -> None:
-        self._goto(self.stack.currentIndex() - 1)
+        cur = self.stack.currentIndex()
+        prev = cur - 1
+        # 图片目录模式跳过了步骤2（抽帧）：步骤3 → 直接回到步骤1
+        if cur == 2 and self._is_image_dir_mode():
+            prev = 0
+        self._goto(prev)
 
     def _next(self) -> None:
         cur = self.stack.currentIndex()
@@ -147,7 +156,11 @@ class MainWindow(QMainWindow):
                 p.on_leave()
             self._goto(0)
             return
-        self._goto(cur + 1)
+        nxt = cur + 1
+        # 图片目录模式：步骤1 → 跳过步骤2（抽帧），直接进入步骤3推理
+        if cur == 0 and self._is_image_dir_mode():
+            nxt = 2
+        self._goto(nxt)
 
     def set_status(self, text: str) -> None:
         self.status_label.setText(text)

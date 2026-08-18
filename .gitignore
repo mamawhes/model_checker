@@ -10,4 +10,8 @@ wheels/
 .venv
 *.mp4
 *.onnx
+*.jpg
+*.png
+*.csv
+*.pdf
 .trae/

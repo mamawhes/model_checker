@@ -166,7 +166,10 @@ def _write_pdf(
     story.append(Paragraph("YOLO 模型检测效果报告", title_style))
     story.append(Spacer(1, 8))
     story.append(Paragraph(f"模型：{state.model_path}", normal))
-    story.append(Paragraph(f"视频：{state.video_path}", normal))
+    if state.image_dir and not state.video_path:
+        story.append(Paragraph(f"图片目录：{state.image_dir}", normal))
+    else:
+        story.append(Paragraph(f"视频：{state.video_path}", normal))
     story.append(
         Paragraph(
             f"参数：conf={state.conf}  iou={state.iou}  imgsz={state.imgsz}"

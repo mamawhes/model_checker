@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
@@ -64,8 +65,11 @@ class FramesPage(BasePage):
         self.btn_delete.clicked.connect(self._delete_selected)
         self.btn_add = QPushButton("添加图片…")
         self.btn_add.clicked.connect(self._add_images)
+        self.btn_export = QPushButton("导出图片…")
+        self.btn_export.clicked.connect(self._export_images)
         bar.addWidget(self.btn_delete)
         bar.addWidget(self.btn_add)
+        bar.addWidget(self.btn_export)
         bar.addStretch(1)
         root.addLayout(bar)
 
@@ -218,9 +222,65 @@ class FramesPage(BasePage):
         self._refresh_list()
         self._update_count()
 
+    def _export_images(self) -> None:
+        """导出抽帧图片到指定目录（原始图片，不带检测框）。"""
+        from PySide6.QtWidgets import QFileDialog
+
+        rows = sorted({self.list.row(it) for it in self.list.selectedItems()})
+        if rows:
+            frames = [self.state.frames[r] for r in rows]
+            scope = f"选中的 {len(frames)} 张"
+        else:
+            frames = list(self.state.frames)
+            scope = f"全部 {len(frames)} 张"
+
+        if not frames:
+            QMessageBox.information(self, "导出图片", "没有可导出的图片")
+            return
+
+        out_dir = QFileDialog.getExistingDirectory(self, f"导出{scope}图片到目录", "")
+        if not out_dir:
+            return
+
+        success = 0
+        failed: list[str] = []
+        used_names: set[str] = set()
+        for f in frames:
+            src = f.path
+            if not os.path.isfile(src):
+                failed.append(src)
+                continue
+            name = os.path.basename(src)
+            # 同名冲突时加序号后缀（如不同目录下同名图片）
+            if name in used_names:
+                base, ext = os.path.splitext(name)
+                i = 1
+                while f"{base}_{i}{ext}" in used_names:
+                    i += 1
+                name = f"{base}_{i}{ext}"
+            used_names.add(name)
+            dst = os.path.join(out_dir, name)
+            try:
+                shutil.copy2(src, dst)
+                success += 1
+            except OSError as e:
+                failed.append(f"{src} ({e})")
+
+        if failed:
+            msg = f"已导出 {success}/{len(frames)} 张图片到：\n{out_dir}\n\n失败 {len(failed)} 张：\n"
+            msg += "\n".join(failed[:5])
+            if len(failed) > 5:
+                msg += f"\n…等共 {len(failed)} 张"
+            QMessageBox.warning(self, "导出完成（部分失败）", msg)
+        else:
+            QMessageBox.information(
+                self, "导出完成", f"已导出 {success} 张图片到：\n{out_dir}"
+            )
+
     def _set_controls_enabled(self, enabled: bool) -> None:
         self.btn_delete.setEnabled(enabled)
         self.btn_add.setEnabled(enabled)
+        self.btn_export.setEnabled(enabled)
 
     def can_next(self) -> tuple[bool, str]:
         if not self.state.frames:

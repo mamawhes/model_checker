@@ -51,6 +51,8 @@ class SessionState:
     names_path: str = ""
     class_names: Optional[list[str]] = None
     video_path: str = ""
+    # 图片目录模式：非空时跳过抽帧步骤，直接用目录内的图片作为帧来源
+    image_dir: str = ""
     frame_count_target: int = 20
     filter_detected: bool = False  # 抽帧时仅保留检测到目标的帧
     conf: float = 0.25

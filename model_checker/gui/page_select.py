@@ -1,6 +1,8 @@
-"""步骤1：选择 ONNX 模型、视频与推理参数。"""
+"""步骤1：选择 ONNX 模型、视频/图片目录与推理参数。"""
 
 from __future__ import annotations
+
+import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -18,8 +20,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..state import FrameItem
 from ..video import get_video_info
 from .base_page import BasePage
+
+# 图片目录模式支持的图片扩展名
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
 
 
 class SelectPage(BasePage):
@@ -28,6 +34,7 @@ class SelectPage(BasePage):
         self._video_info: dict = {}
         # 记录上次离开时的参数，用于检测变化以决定是否重新抽帧/推理
         self._prev_video: str = ""
+        self._prev_image_dir: str = ""
         self._prev_frame_count = None
         self._prev_filter = None
         self._prev_conf = None
@@ -37,7 +44,7 @@ class SelectPage(BasePage):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.addWidget(self._title("步骤 1 / 5 — 选择模型与视频"))
+        root.addWidget(self._title("步骤 1 / 5 — 选择模型与数据来源"))
 
         # 模型组
         box_model = QGroupBox("ONNX 模型")
@@ -80,6 +87,23 @@ class SelectPage(BasePage):
         vlay.addWidget(self.video_info_label)
         root.addWidget(box_video)
 
+        # 图片目录组（与视频互斥：选其一即可，选另一个会清空当前）
+        box_dir = QGroupBox("或 导入图片目录（跳过抽帧步骤）")
+        dlay = QVBoxLayout(box_dir)
+        rowd = QHBoxLayout()
+        self.image_dir_edit = QLineEdit()
+        self.image_dir_edit.setReadOnly(True)
+        self.image_dir_edit.setPlaceholderText("选择包含图片的目录 (png/jpg/bmp/tif…)")
+        btn_dir = QPushButton("选择目录…")
+        btn_dir.clicked.connect(self._pick_image_dir)
+        rowd.addWidget(self.image_dir_edit, 1)
+        rowd.addWidget(btn_dir)
+        dlay.addLayout(rowd)
+        self.image_dir_info_label = QLabel("未选择图片目录")
+        self.image_dir_info_label.setStyleSheet("color: #888;")
+        dlay.addWidget(self.image_dir_info_label)
+        root.addWidget(box_dir)
+
         # 参数组
         box_param = QGroupBox("推理与抽帧参数")
         form = QFormLayout(box_param)
@@ -115,7 +139,8 @@ class SelectPage(BasePage):
         form.addRow("输入尺寸 (imgsz)：", self.spin_imgsz)
 
         hint = QLabel(
-            "提示：修改「视频」「抽帧数量」或勾选项后前进会自动重新抽帧；"
+            "提示：视频与图片目录二选一。导入图片目录时可跳过抽帧步骤；"
+            "修改「视频」「抽帧数量」或勾选项后前进会自动重新抽帧；"
             "修改推理参数会作废已有推理结果。"
         )
         hint.setStyleSheet("color: #888; font-size: 12px;")
@@ -149,6 +174,9 @@ class SelectPage(BasePage):
         )
         if path:
             self.video_edit.setText(path)
+            # 互斥：清空图片目录
+            self.image_dir_edit.clear()
+            self.image_dir_info_label.setText("未选择图片目录")
             try:
                 self._video_info = get_video_info(path)
                 dur = self._video_info["duration"]
@@ -161,10 +189,52 @@ class SelectPage(BasePage):
             except Exception as e:  # noqa: BLE001
                 self._video_info = {}
                 self.video_info_label.setText(f"读取视频信息失败：{e}")
+            self._update_param_enabled()
+
+    def _pick_image_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "选择图片目录", "")
+        if not path:
+            return
+        self.image_dir_edit.setText(path)
+        # 互斥：清空视频
+        self.video_edit.clear()
+        self._video_info = {}
+        self.video_info_label.setText("未选择视频")
+        # 扫描统计
+        paths = self._scan_image_dir(path)
+        if paths:
+            self.image_dir_info_label.setText(f"目录中共 {len(paths)} 张图片")
+        else:
+            self.image_dir_info_label.setText(
+                "目录中没有支持的图片 (png/jpg/jpeg/bmp/tif/tiff)"
+            )
+        self._update_param_enabled()
+
+    def _scan_image_dir(self, dir_path: str) -> list[str]:
+        """扫描目录下所有支持的图片，按文件名排序返回绝对路径。"""
+        try:
+            names = [
+                n
+                for n in os.listdir(dir_path)
+                if n.lower().endswith(_IMAGE_EXTS) and os.path.isfile(
+                    os.path.join(dir_path, n)
+                )
+            ]
+        except OSError:
+            return []
+        names.sort()
+        return [os.path.join(dir_path, n) for n in names]
+
+    def _update_param_enabled(self) -> None:
+        """图片目录模式下「抽帧数量/过滤」无意义，禁用以示区分。"""
+        image_dir_mode = bool(self.image_dir_edit.text().strip())
+        self.spin_frames.setEnabled(not image_dir_mode)
+        self.chk_filter.setEnabled(not image_dir_mode)
 
     # ---- 状态流转 ----
     def on_leave(self) -> None:
         new_video = self.video_edit.text().strip()
+        new_image_dir = self.image_dir_edit.text().strip()
         new_frame_count = self.spin_frames.value()
         new_filter = self.chk_filter.isChecked()
         new_conf = self.spin_conf.value()
@@ -172,14 +242,18 @@ class SelectPage(BasePage):
         new_imgsz = self.spin_imgsz.value()
 
         # 检测参数变化（首次离开不触发）：
-        #   视频/抽帧数/过滤勾选变化 → 清空全部，迫使步骤2重新抽帧
+        #   来源(视频/图片目录)变化、或视频模式下抽帧数/过滤勾选变化 → 清空全部
         #   仅推理参数变化 → 保留抽帧，作废推理与审核结果
-        has_prev = self._prev_video != ""
-        if has_prev and (
+        has_prev = self._prev_video != "" or self._prev_image_dir != ""
+        source_changed = (
             self._prev_video != new_video
-            or self._prev_frame_count != new_frame_count
+            or self._prev_image_dir != new_image_dir
+        )
+        frame_param_changed = bool(new_video) and (
+            self._prev_frame_count != new_frame_count
             or self._prev_filter != new_filter
-        ):
+        )
+        if has_prev and (source_changed or frame_param_changed):
             self.state.reset()
         elif has_prev and (
             self._prev_conf != new_conf
@@ -194,6 +268,7 @@ class SelectPage(BasePage):
                 f.wrong = 0
 
         self._prev_video = new_video
+        self._prev_image_dir = new_image_dir
         self._prev_frame_count = new_frame_count
         self._prev_filter = new_filter
         self._prev_conf = new_conf
@@ -203,6 +278,7 @@ class SelectPage(BasePage):
         self.state.model_path = self.model_edit.text().strip()
         self.state.names_path = self.names_edit.text().strip()
         self.state.video_path = new_video
+        self.state.image_dir = new_image_dir
         self.state.frame_count_target = new_frame_count
         self.state.filter_detected = new_filter
         self.state.conf = new_conf
@@ -222,11 +298,23 @@ class SelectPage(BasePage):
         else:
             self.state.class_names = None
 
+        # 图片目录模式：扫描目录填入 frames（首次进入或来源变化 reset 后）
+        if new_image_dir and not self.state.frames:
+            paths = self._scan_image_dir(new_image_dir)
+            self.state.frames = [FrameItem(path=p) for p in paths]
+
     def can_next(self) -> tuple[bool, str]:
         if not self.model_edit.text().strip():
             return False, "请先选择 ONNX 模型"
-        if not self.video_edit.text().strip():
-            return False, "请先选择视频"
-        if not self._video_info:
+        video = self.video_edit.text().strip()
+        image_dir = self.image_dir_edit.text().strip()
+        if not video and not image_dir:
+            return False, "请先选择视频或图片目录"
+        if video and not self._video_info:
             return False, "视频信息读取失败，请重新选择视频"
+        if image_dir:
+            if not os.path.isdir(image_dir):
+                return False, "图片目录无效，请重新选择"
+            if not self._scan_image_dir(image_dir):
+                return False, "图片目录中没有支持的图片 (png/jpg/jpeg/bmp/tif/tiff)"
         return True, ""
